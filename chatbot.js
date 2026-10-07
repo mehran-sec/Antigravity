@@ -616,6 +616,8 @@
     return msg;
   }
 
+  let wakeupTimer = null;
+
   // Show typing indicator
   function showTypingIndicator() {
     const typing = document.createElement('div');
@@ -625,13 +627,26 @@
       <span class="mehran-dot"></span>
       <span class="mehran-dot"></span>
       <span class="mehran-dot"></span>
+      <span class="mehran-typing-status" id="mehran-typing-status" style="margin-left: 0.5rem; font-size: 0.78rem; color: var(--ai-text-muted);"></span>
     `;
     messagesEl.appendChild(typing);
     scrollToBottom();
+
+    // If waiting more than 4.5 seconds (Hugging Face cold start wake-up), display notice
+    wakeupTimer = setTimeout(() => {
+      const statusEl = document.getElementById('mehran-typing-status');
+      if (statusEl) {
+        statusEl.textContent = 'Waking up server...';
+      }
+    }, 4500);
   }
 
   // Remove typing indicator
   function removeTypingIndicator() {
+    if (wakeupTimer) {
+      clearTimeout(wakeupTimer);
+      wakeupTimer = null;
+    }
     const indicator = document.getElementById('mehran-typing-indicator');
     if (indicator) indicator.remove();
   }
