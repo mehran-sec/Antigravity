@@ -1,0 +1,320 @@
+/**
+ * chatbot.js — Generalized Portfolio Assistant Widget with Mascot
+ * Template version for portfolio-ai-assistant skill.
+ */
+
+(function () {
+  'use strict';
+
+  const PRODUCTION_BACKEND_URL = window.PORTFOLIO_AI_BACKEND_URL || "{{PRODUCTION_BACKEND_URL}}";
+  const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const BACKEND_URL = IS_LOCAL ? "http://localhost:8000" : PRODUCTION_BACKEND_URL;
+
+  const SUGGESTED_QUESTIONS = [
+    "What projects has {{USER_NAME}} built?",
+    "What are his core technical skills?",
+    "Tell me about his background.",
+    "What is his career goal?"
+  ];
+
+  function renderMarkdown(rawText) {
+    if (!rawText) return '';
+    if (typeof window.marked !== 'undefined' && typeof window.marked.parse === 'function') {
+      try { return window.marked.parse(rawText); } catch (e) {}
+    }
+
+    const lines = rawText.split('\n');
+    const html = [];
+    let inList = false, inOrderedList = false, inCodeBlock = false, codeBuffer = [];
+
+    function formatInline(str) {
+      let out = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+      out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      return out;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.trim().startsWith('```')) {
+        if (inCodeBlock) {
+          html.push('<pre><code>' + formatInline(codeBuffer.join('\n')) + '</code></pre>');
+          codeBuffer = [];
+          inCodeBlock = false;
+        } else {
+          if (inList) { html.push('</ul>'); inList = false; }
+          if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+          inCodeBlock = true;
+        }
+        continue;
+      }
+      if (inCodeBlock) { codeBuffer.push(line); continue; }
+      const trimmed = line.trim();
+      if (!trimmed) {
+        if (inList) { html.push('</ul>'); inList = false; }
+        if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+        continue;
+      }
+      if (trimmed.startsWith('### ')) {
+        if (inList) { html.push('</ul>'); inList = false; }
+        if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+        html.push('<h4 class="ai-heading">' + formatInline(trimmed.slice(4)) + '</h4>');
+        continue;
+      }
+      if (trimmed.startsWith('## ') || trimmed.startsWith('# ')) {
+        if (inList) { html.push('</ul>'); inList = false; }
+        if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+        html.push('<h3 class="ai-heading">' + formatInline(trimmed.replace(/^#+\s*/, '')) + '</h3>');
+        continue;
+      }
+      const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bulletMatch) {
+        if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+        if (!inList) { html.push('<ul>'); inList = true; }
+        html.push('<li>' + formatInline(bulletMatch[1]) + '</li>');
+        continue;
+      }
+      const numMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+      if (numMatch) {
+        if (inList) { html.push('</ul>'); inList = false; }
+        if (!inOrderedList) { html.push('<ol>'); inOrderedList = true; }
+        html.push('<li>' + formatInline(numMatch[1]) + '</li>');
+        continue;
+      }
+      if (inList) { html.push('</ul>'); inList = false; }
+      if (inOrderedList) { html.push('</ol>'); inOrderedList = false; }
+      html.push('<p>' + formatInline(trimmed) + '</p>');
+    }
+    if (inList) html.push('</ul>');
+    if (inOrderedList) html.push('</ol>');
+    if (inCodeBlock) html.push('<pre><code>' + formatInline(codeBuffer.join('\n')) + '</code></pre>');
+    return html.join('');
+  }
+
+  // Styles
+  const styles = `
+    #portfolio-ai-widget {
+      position: fixed; bottom: 1rem; right: 1.25rem; z-index: 9999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --ai-bg: #0B0B0F; --ai-surface: #14141A; --ai-elevated: #1C1C24;
+      --ai-text-primary: #EDEDEB; --ai-text-secondary: #9B9B9B; --ai-text-muted: #7C7C7C;
+      --ai-accent: {{ACCENT_COLOR}}; --ai-border: #252530; --ai-danger: #E55B5B;
+    }
+    #buddy-launcher-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; cursor: pointer; user-select: none; }
+    .buddy-ask-tag {
+      display: inline-flex; align-items: center; gap: 0.4rem; background: var(--ai-surface);
+      color: var(--ai-text-primary); border: 1px solid var(--ai-border); border-radius: 9999px;
+      padding: 0.38rem 0.85rem; font-size: 0.8125rem; font-weight: 600; box-shadow: 0 4px 18px rgba(0,0,0,0.45);
+      transition: all 0.2s ease;
+    }
+    #buddy-launcher-wrap:hover .buddy-ask-tag { border-color: var(--ai-accent); color: var(--ai-accent); transform: translateY(-2px); }
+    #buddy {
+      --ghost-body: #ffffff; --ghost-outline: #0b1020; --ghost-hem: #d9efff;
+      --ghost-blush: rgba(168, 198, 108, 0.55); --ghost-shield: var(--ai-accent);
+      width: 108px; height: 124px; cursor: pointer; position: relative; filter: drop-shadow(0 6px 16px rgba(0,0,0,0.4));
+      transition: transform 0.2s ease;
+    }
+    #buddy-launcher-wrap:hover #buddy { transform: scale(1.03); }
+    #buddy svg { width: 100%; height: 100%; overflow: visible; display: block; }
+    #buddy #float { animation: bd-float 4.5s ease-in-out infinite; }
+    #buddy #lean { transform-origin: 100px 200px; }
+    #buddy #sway { transform-origin: 100px 200px; animation: bd-sway 5s ease-in-out infinite; }
+    #buddy .shadow { transform-box: fill-box; transform-origin: center; animation: bd-shadow 4.5s ease-in-out infinite; }
+    #buddy .eye { transform-box: fill-box; transform-origin: center; animation: bd-blink 5.5s infinite; }
+    #buddy .eye.right { animation-delay: .05s; }
+    #buddy .arm { transform-origin: 46px 86px; transition: transform .35s ease; }
+    #buddy #shield { transform-box: fill-box; transform-origin: center; transform: scale(0); transition: transform .35s cubic-bezier(.3,1.6,.5,1); }
+    #buddy .zzz text { opacity: 0; font: 700 15px sans-serif; fill: var(--ai-accent); transform-box: fill-box; transform-origin: center; }
+
+    #buddy[data-mood="happy"] .blush { transform: scale(1.3); }
+    #buddy[data-mood="happy"] .arm { animation: bd-wave .5s ease-in-out 3; }
+    #buddy[data-mood="guard"] #shield { transform: scale(1); }
+    #buddy[data-mood="sleepy"] .eye { animation: none; }
+    #buddy[data-mood="sleepy"] .eye-shape { transform: scaleY(.1); }
+    #buddy[data-mood="sleepy"] .zzz text { animation: bd-zzz 2.6s ease-out infinite; }
+    #buddy[data-mood="sleepy"] .zzz text:nth-child(2) { animation-delay: .85s; }
+    #buddy[data-mood="sleepy"] .zzz text:nth-child(3) { animation-delay: 1.7s; }
+
+    @keyframes bd-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    @keyframes bd-shadow { 0%,100% { transform: scale(1); opacity: .25; } 50% { transform: scale(.82); opacity: .12; } }
+    @keyframes bd-sway { 0%,100% { transform: rotate(-1.6deg); } 50% { transform: rotate(1.6deg); } }
+    @keyframes bd-blink { 0%,93%,100% { transform: scaleY(1); } 96% { transform: scaleY(.08); } }
+    @keyframes bd-wave { 0%,100% { transform: rotate(18deg); } 50% { transform: rotate(50deg); } }
+    @keyframes bd-zzz { 0% { opacity: 0; transform: translate(0,6px) scale(.7); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(8px,-14px) scale(1.1); } }
+
+    .portfolio-ai-panel {
+      display: none; flex-direction: column; position: absolute; bottom: 0; right: 0;
+      width: 400px; max-width: calc(100vw - 2rem); height: 560px; max-height: calc(100vh - 4rem);
+      background: var(--ai-surface); border: 1px solid var(--ai-border); border-radius: 8px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.65); overflow: hidden; z-index: 10000;
+    }
+    .portfolio-ai-panel.open { display: flex; }
+    .portfolio-ai-header { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 1rem; background: var(--ai-elevated); border-bottom: 1px solid var(--ai-border); }
+    .portfolio-ai-messages { flex: 1; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.85rem; background: var(--ai-bg); font-size: 0.875rem; line-height: 1.6; }
+    .portfolio-ai-footer { padding: 0.75rem 1rem; background: var(--ai-surface); border-top: 1px solid var(--ai-border); }
+    .portfolio-msg { max-width: 90%; padding: 0.75rem 0.95rem; border-radius: 6px; word-break: break-word; }
+    .portfolio-msg-bot { align-self: flex-start; background: var(--ai-surface); border: 1px solid var(--ai-border); color: var(--ai-text-primary); }
+    .portfolio-msg-user { align-self: flex-end; background: var(--ai-elevated); border: 1px solid rgba(168,198,108,0.3); color: var(--ai-accent); }
+    .portfolio-ai-chip { text-align: left; font-size: 0.78rem; padding: 0.45rem 0.65rem; background: var(--ai-surface); border: 1px solid var(--ai-border); border-radius: 4px; color: var(--ai-text-secondary); cursor: pointer; }
+    .portfolio-ai-chip:hover { border-color: var(--ai-accent); color: var(--ai-accent); }
+    @media (max-width: 600px) { #buddy { width: 84px; height: 98px; } .portfolio-ai-panel { width: calc(100vw - 1.5rem); height: calc(100vh - 3rem); } }
+  `;
+
+  const styleEl = document.createElement('style');
+  styleEl.textContent = styles;
+  document.head.appendChild(styleEl);
+
+  const container = document.createElement('div');
+  container.id = 'portfolio-ai-widget';
+  container.innerHTML = `
+    <div id="buddy-launcher-wrap">
+      <div class="buddy-ask-tag"><span>✦</span><span>Ask {{ASSISTANT_NAME}}</span></div>
+      <div id="buddy" role="button" tabindex="0">
+        <svg viewBox="0 0 200 230" aria-hidden="true">
+          <defs><clipPath id="bd-clip"><path d="M44 80C44 40 68 14 100 14C132 14 156 40 156 80C158 100 166 120 170 138C175 155 178 168 178 182C178 194 170 200 158 198C146 196 138 190 124 194C114 197 110 208 100 208C90 208 86 197 76 194C62 190 54 199 42 197C28 195 22 190 22 182C22 168 26 152 30 138C34 120 44 100 44 80Z"/></clipPath></defs>
+          <ellipse class="shadow" cx="100" cy="222" rx="42" ry="5" fill="#0b1020"/>
+          <g id="float"><g id="lean"><g id="sway">
+            <path d="M44 80C44 40 68 14 100 14C132 14 156 40 156 80C158 100 166 120 170 138C175 155 178 168 178 182C178 194 170 200 158 198C146 196 138 190 124 194C114 197 110 208 100 208C90 208 86 197 76 194C62 190 54 199 42 197C28 195 22 190 22 182C22 168 26 152 30 138C34 120 44 100 44 80Z" fill="var(--ghost-body)"/>
+            <g clip-path="url(#bd-clip)"><path d="M10 172C30 182 48 170 72 174C88 177 90 190 102 190C114 190 118 176 134 172C152 168 166 180 190 172V230H10Z" fill="var(--ghost-hem)"/></g>
+            <path d="M44 80C44 40 68 14 100 14C132 14 156 40 156 80C158 100 166 120 170 138C175 155 178 168 178 182C178 194 170 200 158 198C146 196 138 190 124 194C114 197 110 208 100 208C90 208 86 197 76 194C62 190 54 199 42 197C28 195 22 190 22 182C22 168 26 152 30 138C34 120 44 100 44 80Z" fill="none" stroke="var(--ghost-outline)" stroke-width="4.5" stroke-linejoin="round"/>
+            <g class="arm left"><path d="M46 84C30 92 10 100 8 116C6 130 16 138 28 136C36 134 40 128 44 122Z" fill="var(--ghost-body)"/><path d="M46 84C30 92 10 100 8 116C6 130 16 138 28 136C36 134 40 128 44 122" fill="none" stroke="var(--ghost-outline)" stroke-width="4.5" stroke-linecap="round"/></g>
+            <g transform="translate(200 0) scale(-1 1)"><g class="arm right"><path d="M46 84C30 92 10 100 8 116C6 130 16 138 28 136C36 134 40 128 44 122Z" fill="var(--ghost-body)"/><path d="M46 84C30 92 10 100 8 116C6 130 16 138 28 136C36 134 40 128 44 122" fill="none" stroke="var(--ghost-outline)" stroke-width="4.5" stroke-linecap="round"/></g></g>
+            <ellipse class="blush" cx="62" cy="89" rx="12" ry="6.5" fill="var(--ghost-blush)"/>
+            <ellipse class="blush" cx="138" cy="89" rx="12" ry="6.5" fill="var(--ghost-blush)"/>
+            <g class="eye left"><g class="eye-look"><ellipse class="eye-shape" cx="74" cy="67" rx="13" ry="16" fill="var(--ghost-eye)"/><circle class="shine" cx="69" cy="62" r="4.6" fill="#fff"/></g></g>
+            <g class="eye right"><g class="eye-look"><ellipse class="eye-shape" cx="126" cy="67" rx="13" ry="16" fill="var(--ghost-eye)"/><circle class="shine" cx="121" cy="62" r="4.6" fill="#fff"/></g></g>
+            <path id="mouth" d="M92 80Q100 90 108 80" fill="none" stroke="var(--ghost-outline)" stroke-width="3.5" stroke-linecap="round"/>
+            <g id="shield"><path d="M100 132L118 138V152C118 164 110 170 100 174C90 170 82 164 82 152V138Z" fill="var(--ghost-shield)" stroke="var(--ghost-outline)" stroke-width="3.5"/><path d="M92 153l6 6 11-12" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/></g>
+            <g class="zzz"><text x="142" y="40">z</text><text x="150" y="28">z</text><text x="158" y="16">Z</text></g>
+          </g></g></g>
+        </svg>
+      </div>
+    </div>
+    <div class="portfolio-ai-panel" id="portfolio-panel">
+      <div class="portfolio-ai-header">
+        <div><strong>✦ {{ASSISTANT_NAME}}</strong></div>
+        <button id="portfolio-close" style="background:transparent;border:none;color:#fff;font-size:1.2rem;cursor:pointer;">×</button>
+      </div>
+      <div class="portfolio-ai-messages" id="portfolio-messages">
+        <div class="portfolio-msg portfolio-msg-bot">
+          <p>Hi! I'm {{USER_NAME}}'s portfolio assistant. Ask me anything about his work:</p>
+          <div id="portfolio-suggestions" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.5rem;"></div>
+        </div>
+      </div>
+      <div class="portfolio-ai-footer">
+        <form id="portfolio-form" style="display:flex;gap:0.5rem;">
+          <input type="text" id="portfolio-input" placeholder="Ask a question..." style="flex:1;background:#0B0B0F;border:1px solid #252530;color:#fff;padding:0.6rem;border-radius:4px;" required />
+          <button type="submit" style="background:var(--ai-accent);border:none;padding:0.6rem 0.9rem;border-radius:4px;cursor:pointer;font-weight:600;">➤</button>
+        </form>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(container);
+
+  const buddyWrap = document.getElementById('buddy-launcher-wrap');
+  const buddy = document.getElementById('buddy');
+  const lean = buddy.querySelector('#lean');
+  const mouth = buddy.querySelector('#mouth');
+  const looks = [...buddy.querySelectorAll('.eye-look')];
+  const shines = [...buddy.querySelectorAll('.shine')];
+  const panel = document.getElementById('portfolio-panel');
+  const closeBtn = document.getElementById('portfolio-close');
+  const messagesEl = document.getElementById('portfolio-messages');
+  const form = document.getElementById('portfolio-form');
+  const inputEl = document.getElementById('portfolio-input');
+  const suggestionsBox = document.getElementById('portfolio-suggestions');
+
+  let isOpen = false, isLoading = false;
+  const MOODS = {
+    idle: { d: 'M92 80Q100 90 108 80', fill: 'none' },
+    happy: { d: 'M90 79Q100 99 110 79Z', fill: '#ff6b8a' },
+    alert: { d: 'M96 84a4 5 0 1 0 8 0a4 5 0 1 0 -8 0Z', fill: '#0b1020' },
+    guard: { d: 'M94 82Q100 87 106 82', fill: 'none' },
+    sleepy: { d: 'M95 84Q100 86 105 84', fill: 'none' }
+  };
+  let moodTimer;
+  function setMood(name, ms) {
+    buddy.dataset.mood = name;
+    if (MOODS[name]) { mouth.setAttribute('d', MOODS[name].d); mouth.setAttribute('fill', MOODS[name].fill); }
+    clearTimeout(moodTimer);
+    if (name !== 'idle' && ms) moodTimer = setTimeout(() => setMood('idle'), ms);
+  }
+
+  // Pointer tracking
+  const target = { x: 0, y: 0 }, cur = { x: 0, y: 0 };
+  let lastMove = performance.now(), raf = 0;
+  function aim(px, py) {
+    const r = buddy.getBoundingClientRect();
+    const dx = px - (r.left + r.width / 2), dy = py - (r.top + r.height / 2);
+    const len = Math.hypot(dx, dy) || 1, k = Math.min(1, len / 280);
+    target.x = (dx / len) * k; target.y = (dy / len) * k;
+    lastMove = performance.now(); kick();
+  }
+  function frame() {
+    raf = 0; cur.x += (target.x - cur.x) * 0.12; cur.y += (target.y - cur.y) * 0.12;
+    looks.forEach(l => l.style.transform = `translate(${cur.x * 3.5}px, ${cur.y * 4}px)`);
+    shines.forEach(s => s.style.transform = `translate(${cur.x * 1.5}px, ${cur.y * 1.5}px)`);
+    lean.style.transform = `translate(${cur.x * 3}px, ${cur.y * 2}px) rotate(${cur.x * 5}deg)`;
+    if (Math.abs(target.x - cur.x) > .002 || Math.abs(target.y - cur.y) > .002) kick();
+  }
+  function kick() { if (!raf && !document.hidden) raf = requestAnimationFrame(frame); }
+  addEventListener('pointermove', e => aim(e.clientX, e.clientY), { passive: true });
+
+  // Sleep
+  let sleepTimer;
+  function armSleep() { clearTimeout(sleepTimer); sleepTimer = setTimeout(() => { if (!isOpen) setMood('sleepy'); }, 30000); }
+  ['scroll', 'keydown', 'pointerdown'].forEach(t => addEventListener(t, () => { if (buddy.dataset.mood === 'sleepy') setMood('idle'); armSleep(); }, { passive: true }));
+  armSleep();
+
+  function toggle() {
+    isOpen = !isOpen;
+    panel.classList.toggle('open', isOpen);
+    setMood(isOpen ? 'happy' : 'idle', 1200);
+    if (isOpen) inputEl.focus();
+  }
+  buddyWrap.addEventListener('click', e => { if (!panel.contains(e.target)) toggle(); });
+  closeBtn.addEventListener('click', toggle);
+
+  SUGGESTED_QUESTIONS.forEach(q => {
+    const chip = document.createElement('button');
+    chip.className = 'portfolio-ai-chip'; chip.textContent = q;
+    chip.onclick = () => { inputEl.value = q; handleSend(); };
+    suggestionsBox.appendChild(chip);
+  });
+
+  async function handleSend() {
+    const query = inputEl.value.trim();
+    if (!query || isLoading) return;
+    inputEl.value = ''; isLoading = true;
+
+    const uMsg = document.createElement('div');
+    uMsg.className = 'portfolio-msg portfolio-msg-user'; uMsg.textContent = query;
+    messagesEl.appendChild(uMsg);
+
+    setMood('guard');
+    try {
+      const res = await fetch(`${BACKEND_URL}/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: query })
+      });
+      const data = await res.json();
+      const bMsg = document.createElement('div');
+      bMsg.className = 'portfolio-msg portfolio-msg-bot';
+      bMsg.innerHTML = renderMarkdown(data.answer || "No response received.");
+      messagesEl.appendChild(bMsg);
+      setMood('happy', 2500);
+    } catch (e) {
+      setMood('alert', 2000);
+      const eMsg = document.createElement('div');
+      eMsg.className = 'portfolio-msg portfolio-msg-bot';
+      eMsg.textContent = "Unable to connect to assistant.";
+      messagesEl.appendChild(eMsg);
+    } finally {
+      isLoading = false;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  }
+  form.onsubmit = e => { e.preventDefault(); handleSend(); };
+})();

@@ -1,0 +1,96 @@
+/**
+ * writeups_engine.js.template
+ * Reusable client-side dynamic markdown write-up rendering engine.
+ * Requires: marked.js (<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>)
+ */
+
+(function () {
+  'use strict';
+
+  const MANIFEST_URL = 'writeups/manifest.json';
+  const WRITEUPS_DIR = 'writeups/';
+
+  function parseFrontmatter(text) {
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('---')) return { data: {}, content: text };
+    const endIndex = trimmed.indexOf('\n---', 3);
+    if (endIndex === -1) return { data: {}, content: text };
+
+    const rawYaml = trimmed.substring(3, endIndex).trim();
+    const content = trimmed.substring(endIndex + 4).trim();
+    const data = {};
+
+    rawYaml.split('\n').forEach(line => {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) return;
+      const key = line.slice(0, colonIdx).trim();
+      let val = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
+      if (val.startsWith('[') && val.endsWith(']')) {
+        val = val.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+      }
+      data[key] = val;
+    });
+
+    return { data, content };
+  }
+
+  async function loadPosts() {
+    const grid = document.getElementById('writeups-grid');
+    if (!grid) return;
+
+    try {
+      const res = await fetch(MANIFEST_URL);
+      const files = await res.json();
+      grid.innerHTML = '';
+
+      for (const file of files) {
+        const doc = await (await fetch(WRITEUPS_DIR + file)).text();
+        const { data } = parseFrontmatter(doc);
+        const slug = file.replace(/\.md$/, '');
+
+        const card = document.createElement('article');
+        card.className = 'writeup-card';
+        card.innerHTML = `
+          <h3>${data.title || slug}</h3>
+          <p>${data.summary || ''}</p>
+          <div class="tags">${(data.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}</div>
+          <a href="#${slug}" class="read-link">Read Write-up &rarr;</a>
+        `;
+        grid.appendChild(card);
+      }
+    } catch (e) {
+      grid.innerHTML = '<p>Unable to load write-ups.</p>';
+    }
+  }
+
+  async function handleRoute() {
+    const slug = window.location.hash.slice(1);
+    const gridView = document.getElementById('grid-view');
+    const articleView = document.getElementById('article-view');
+    if (!gridView || !articleView) return;
+
+    if (!slug) {
+      gridView.style.display = 'block';
+      articleView.style.display = 'none';
+      return;
+    }
+
+    try {
+      const doc = await (await fetch(`${WRITEUPS_DIR}${slug}.md`)).text();
+      const { data, content } = parseFrontmatter(doc);
+      gridView.style.display = 'none';
+      articleView.style.display = 'block';
+      articleView.innerHTML = `
+        <a href="#" class="back-link">&larr; All Write-ups</a>
+        <h1>${data.title || slug}</h1>
+        <div class="article-body">${window.marked.parse(content)}</div>
+      `;
+      window.scrollTo(0, 0);
+    } catch (e) {
+      articleView.innerHTML = '<a href="#">&larr; Back</a><p>Article not found.</p>';
+    }
+  }
+
+  window.addEventListener('hashchange', handleRoute);
+  loadPosts().then(handleRoute);
+})();
