@@ -440,10 +440,13 @@
         color: var(--text-muted);
     }
     .writeup-body img {
+        max-width: 100%;
         height: auto;
         border: 1px solid var(--border);
         border-radius: var(--radius);
         margin: 1.5rem 0;
+        background: var(--bg-surface);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     }
     .writeup-body code {
         font-family: var(--font-mono);
@@ -562,6 +565,7 @@
         'use strict';
 
         var DEFAULT_MANIFEST = [
+            'n8n-soc-alert-pipeline.md',
             'ssh-bruteforce-detection.md',
             'pcap-phishing-investigation.md'
         ];
@@ -603,7 +607,8 @@
         }
 
         function loadPosts() {
-            fetch('writeups/manifest.json')
+            var manifestUrl = 'writeups/manifest.json?v=' + Date.now();
+            fetch(manifestUrl, { cache: 'no-store' })
                 .then(function(res) {
                     if (res.ok) return res.json();
                     throw new Error('Manifest fetch failed');
@@ -614,7 +619,7 @@
                 .then(function(files) {
                     var fetchPromises = files.map(function(file) {
                         var slug = file.replace(/\.md$/, '');
-                        return fetch('writeups/' + file)
+                        return fetch('writeups/' + file + '?v=' + Date.now(), { cache: 'no-store' })
                             .then(function(res) {
                                 if (res.ok) return res.text();
                                 throw new Error('Failed to load ' + file);
@@ -676,7 +681,10 @@
                 return '<span class="tag">' + escapeHtml(t) + '</span>';
             }).join('');
 
-            var bodyHtml = typeof marked !== 'undefined' ? marked.parse(post.content) : post.content;
+            // Normalize any leading /assets/ paths so they resolve relative to writeups.html
+            var normalizedContent = (post.content || '').replace(/\]\(\/assets\//g, '](assets/');
+            var bodyHtml = typeof marked !== 'undefined' ? marked.parse(normalizedContent) : normalizedContent;
+            bodyHtml = bodyHtml.replace(/src=["']\/assets\//g, 'src="assets/');
 
             articleView.innerHTML =
                 '<a href="writeups.html" class="back-link">&larr; All write-ups</a>' +

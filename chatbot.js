@@ -208,7 +208,7 @@
       position: relative;
       -webkit-tap-highlight-color: transparent;
       filter: drop-shadow(0 6px 16px rgba(0,0,0,0.4));
-      transition: transform 0.2s ease;
+      transition: transform 0.35s ease;
     }
     #buddy-launcher-wrap:hover #buddy {
       transform: scale(1.03);
@@ -835,13 +835,14 @@
   /* ---------- Click/Poke handler ---------- */
   function poke() {
     setMood('happy', 1500);
-    if (!calm) buddy.animate(
+    togglePanel();
+    // Only bounce when closing — opening uses the CSS slide animation
+    if (!calm && !isOpen) buddy.animate(
       [{ transform: 'translateY(0) scale(1)' },
        { transform: 'translateY(-14px) scale(1.08,.94)' },
        { transform: 'translateY(0) scale(.96,1.04)' },
        { transform: 'translateY(0) scale(1)' }],
       { duration: 420, easing: 'ease-out' });
-    togglePanel();
   }
 
   buddyWrap.addEventListener('click', (e) => {
@@ -877,14 +878,29 @@
   });
 
   // Toggle Panel
+  const askTag = document.getElementById('buddy-ask-tag');
+
   function togglePanel(open) {
     isOpen = typeof open === 'boolean' ? open : !isOpen;
+    const isMobile = window.innerWidth <= 600;
     if (isOpen) {
       panel.classList.add('open');
+      askTag.style.display = 'none';
+      if (isMobile) {
+        // On mobile, hide ghost (panel fills screen)
+        buddy.style.display = 'none';
+      } else {
+        // On desktop, slide ghost to the left of the panel
+        buddy.style.transform = 'translateX(-412px)';
+      }
       inputEl.focus();
       setMood('happy', 1200);
     } else {
       panel.classList.remove('open');
+      // Reset ghost to original position
+      buddy.style.transform = '';
+      buddy.style.display = '';
+      askTag.style.display = '';
       setMood('idle');
     }
   }
